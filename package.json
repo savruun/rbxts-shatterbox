@@ -1,0 +1,28 @@
+{
+  "name": "rbxts-vex",
+  "main": "src/init.luau",
+  "types": "src/index.d.ts",
+  "version": "1.0.7",
+  "description": "An efficient, performance-minded voxel destruction model. Created by EternalEthel/qrisquinn (same person).",
+  "license": "MIT",
+  "author": "kunosyn",
+  "keywords": [
+    "roblox-ts",
+    "rbxts",
+    "voxel",
+    "destruction",
+    "vex"
+  ],
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "build": "rbxtsc --rojo dev.project.json"
+  },
+  "devDependencies": {
+    "@rbxts/compiler-types": "^3.0.0-types.0",
+    "@rbxts/types": "^1.0.907",
+    "roblox-ts": "^3.0.0",
+    "typescript": "^5.9.3"
+  }
+}
