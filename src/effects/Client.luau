@@ -29,18 +29,8 @@ end
 ]]
 
 
-
-
-
-
-
-
-
-
-
-
 -- The default client behavior (for when an OnVoxelDestruct callback does not exist)
--- ClientEffects.Default = function(voxel) voxel:Destroy() end
+ClientEffects.Default = function(voxel) voxel:Destroy() end
 
 
 
