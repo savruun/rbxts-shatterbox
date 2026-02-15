@@ -64,4 +64,8 @@ export type ImaginaryDestructionParams = SharedDestructionParams & {
 export type InternalDestructionParams = InternalImaginaryParams & UsesOnVoxelDestruct
 export type DestructionParams = ImaginaryDestructionParams & UsesOnVoxelDestruct
 
+export type ImaginaryVoxelArguments = {
+	intersectingPart : Part | Model | WorldInfo | ImaginaryDestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, ExcludePlayersReplication : {Player}?, SkipFloors : boolean?, SkipWalls : boolean?
+}
+
 return {}
