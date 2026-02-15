@@ -3,7 +3,7 @@
 --#selene: allow(incorrect_standard_library_use)
 
 local Shatterbox
-local Types = require(script.Parent.Parent:WaitForChild("Types"))
+local Types = require(script.Parent.Parent.Types)
 
 local ServerEffects = {} :: { [string] : Types.OnVoxelDestruct }
 
@@ -84,6 +84,9 @@ end
 -- Pre-allocated RaycastParams instance
 local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Include
+
+
+ServerEffects.Default = function(voxel) voxel:Destroy() end
 
 ServerEffects.BumpyFloorBreakWalls = function(voxel, info : Types.DestroyedVoxelInfo)
     if info.IsAlreadyDebris then return end
