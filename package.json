@@ -1,18 +1,26 @@
 {
-  "name": "rbxts-vex",
-  "main": "src/init.luau",
-  "types": "src/index.d.ts",
-  "version": "1.0.7",
-  "description": "An efficient, performance-minded voxel destruction model. Created by EternalEthel/qrisquinn (same person).",
-  "license": "MIT",
-  "author": "kunosyn",
+  "name": "@rbxts*/shatterbox",
+  "version": "0.0.1",
+  "description": "Voxel destruction, simple and optimized.",
   "keywords": [
     "roblox-ts",
     "rbxts",
     "voxel",
     "destruction",
-    "vex"
+    "shatterbox"
   ],
+  "homepage": "https://github.com/savruun/rbxts-shatterbox#readme",
+  "bugs": {
+    "url": "https://github.com/savruun/rbxts-shatterbox/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/savruun/rbxts-shatterbox.git"
+  },
+  "license": "MIT",
+  "author": "kunosyn",
+  "main": "src/init.luau",
+  "types": "src/index.d.ts",
   "files": [
     "src"
   ],
