@@ -63,6 +63,7 @@ local PathToServer = lib:WaitForChild("Server")
 
 local HttpService = game:GetService("HttpService")
 local CollectionService = game:GetService("CollectionService")
+local EncodingService = game:GetService("EncodingService")
 local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 
@@ -70,6 +71,11 @@ local isServer, isClient = RunService:IsServer(), RunService:IsClient()
 
 local Settings = require(src:WaitForChild("Settings"))
 
+local ClientEvents, ServerEvents, mapContainer
+
+local OnVoxelDestructRegistry = setmetatable({}, {
+	__index = function(tbl, k) return (k and rawget(tbl, k:lower())) end -- or rawget(tbl, "default") end
+}) :: { [string] : Types.OnVoxelDestruct }
 
 local function FindHumanoidAsAncestorChild(i : Instance)
 	while i do
@@ -94,9 +100,6 @@ local function ShouldSkipInstance(i : Instance)
 end
 
 
---!!!! If you modify any code below here, you are at serious risk of breaking the module. It probably already has a way to do what you need to do. !!!!--
-
-
 local Types = require(src:WaitForChild("Types"))
 
 local USE_CLIENT_SERVER = Settings.USE_CLIENT_SERVER
@@ -108,36 +111,6 @@ local EPSILON = 1e-3
 
 
 local Shatterbox = {}
-
-local OnVoxelDestructRegistry = setmetatable({}, {
-	__index = function(tbl, k) return (k and rawget(tbl, k:lower())) end -- or rawget(tbl, "default") end
-}) :: { [string] : Types.OnVoxelDestruct }
-
-local ClientEvents, ServerEvents, mapContainer
-if isServer then
-	ServerEvents = require(PathToServer).Shatterbox
-
-	mapContainer = workspace.CurrentCamera
-
-	local serverEffects = require(src.effects.Server)
-	serverEffects:SetReference(Shatterbox)
-	serverEffects.SetReference = nil
-	for name, func in pairs(serverEffects) do OnVoxelDestructRegistry[name:lower()] = func end
-elseif isClient then
-	ClientEvents = require(PathToClient).Shatterbox
-
-	mapContainer = workspace:FindFirstChild("ClientMap")
-	if not mapContainer then
-		mapContainer = Instance.new("Folder")
-		mapContainer.Parent = workspace
-		mapContainer.Name = "ClientMap"
-	end
-
-	local clientEffects = require(src:WaitForChild("effects"):WaitForChild("Client"))
-	clientEffects:SetReference(Shatterbox)
-	clientEffects.SetReference = nil
-	for name, func in pairs(clientEffects) do OnVoxelDestructRegistry[name:lower()] = func end
-end
 
 local ObjectCache, CachedParts
 --[[
@@ -2095,7 +2068,7 @@ end
 Shatterbox.Settings = Settings
 
 
-function Shatterbox.Puppeteer(voxel : Part)
+function Shatterbox:Puppeteer(voxel : Part)
 	assert(isServer, "This function can only be called from the server")
 
 	voxel.Anchored = false
@@ -2161,7 +2134,7 @@ function Shatterbox.Puppeteer(voxel : Part)
 end
 
 
-function Shatterbox.FakeClientPuppets(fakePuppets : { Part })
+function Shatterbox:FakeClientPuppets(fakePuppets : { Part })
 	for _, fake in ipairs(fakePuppets) do
 		local OldPuppetData = Puppets[FakePuppetOverrideIndex]
 		if OldPuppetData then
@@ -2183,7 +2156,7 @@ end
 -- Performs voxel destruction around the 'intersectingPart' according to the FilterTagged supplied.
 --
 -- if no FilterTagged is given, everything except IndestructibleTag tagged Block parts are considered for destruction.
-function Shatterbox.Destroy(intersectingPart : Part | Model | Types.WorldInfo | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, UserData : {any}?, ExcludePlayersReplication : {Player}?, SkipFloors : boolean?, SkipWalls : boolean?)
+function Shatterbox:Destroy(intersectingPart : Part | Model | Types.WorldInfo | Types.DestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, OnVoxelDestruct : string?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, OnDestructCompleted : (() -> ())?, UserData : {any}?, ExcludePlayersReplication : {Player}?, SkipFloors : boolean?, SkipWalls : boolean?)
 	coroutine.wrap(function()
 		if ModelQueueBehavior(Shatterbox.Destroy, intersectingPart, FilterTagged, CleanupDelay, OnVoxelDestruct, GridSize, SkipEncapsulatedVoxels, OnDestructCompleted, UserData, ExcludePlayersReplication, SkipFloors, SkipWalls) then
 			return
@@ -2222,9 +2195,12 @@ end
 --Performs voxel destruction around 'intersectingPart', skipping as many intermediate parts as possible. <br>
 --
 -- Returns an array of imaginary voxels for you to optionally create as debris, as well as any existing debris as a second returned array.
-function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.WorldInfo | Types.ImaginaryDestructionParams, FilterTagged : (string | {string})?, CleanupDelay : number?, GridSize : number?, SkipEncapsulatedVoxels : boolean?, ExcludePlayersReplication : {Player}?, SkipFloors : boolean?, SkipWalls : boolean?) : {Types.ImaginaryVoxel}
+function Shatterbox:ImaginaryVoxels(intersectingPart, FilterTagged, CleanupDelay, GridSize, SkipEncapsulatedVoxels, ExcludePlayersReplication, SkipFloors, SkipWalls) : {Types.ImaginaryVoxel}
 
-	local did, voxels, existingDebris = ModelQueueBehavior(Shatterbox.ImaginaryVoxels, intersectingPart, FilterTagged, CleanupDelay, nil, GridSize, SkipEncapsulatedVoxels, nil, nil, ExcludePlayersReplication, SkipFloors, SkipWalls)
+	local did, voxels, existingDebris = ModelQueueBehavior(function(intersectingPart, FilterTagged, CleanupDelay, GridSize, SkipEncapsulatedVoxels, ExcludePlayersReplication, SkipFloors, SkipWalls)
+		self:ImaginaryVoxels()
+	end, intersectingPart, FilterTagged, CleanupDelay, nil, GridSize, SkipEncapsulatedVoxels, nil, nil, ExcludePlayersReplication, SkipFloors, SkipWalls)
+
 	if did then return voxels, existingDebris end
 
 	local params = ValidateDestructionParams(intersectingPart, FilterTagged, CleanupDelay, nil, GridSize, SkipEncapsulatedVoxels, nil, nil, ExcludePlayersReplication, SkipFloors, SkipWalls)
@@ -2244,7 +2220,7 @@ function Shatterbox.ImaginaryVoxels(intersectingPart : Part | Model | Types.Worl
 end
 
 -- Will return a created voxel using the supplied ImaginaryVoxel, will automatically parent the voxel to the ShatterboxTemporary folder and give it the DebrisTag tag
-function Shatterbox.InstantiateImaginaryVoxel(ImaginaryVoxel : Types.ImaginaryVoxel, doNotGiveDebrisTag : boolean?)
+function Shatterbox:InstantiateImaginaryVoxel(ImaginaryVoxel : Types.ImaginaryVoxel, doNotGiveDebrisTag : boolean?)
 	local DirtyGroupID = ImaginaryVoxel.DirtyGroupID
 
 	local voxel = InstantiatePart(DirtyGroupID, ImaginaryVoxel.CFrame, ImaginaryVoxel.Size)
@@ -2264,8 +2240,7 @@ end
 
 
 --Resets an area rather than everything at once, without reverting the ownership of those parts
-function Shatterbox.ResetArea(area : Part | Types.WorldInfo)
-
+function Shatterbox:ResetArea(area : Part | Types.WorldInfo)
 	local ACF, AS = area.CFrame, area.Size
 	if isServer then ServerEvents.SignalResetArea.FireAll(ACF, AS) end
 
@@ -2359,7 +2334,7 @@ end
 
 
 -- resets all modified parts to where they originally were (turning the map back to normal) and re-allocating system queues and maps
-function Shatterbox.Reset(doNotRevertOwnership : boolean?, replicated : boolean?)
+function Shatterbox:Reset(doNotRevertOwnership : boolean?, replicated : boolean?)
 	-- stop all queued destructions
 	ShatterQueue = {}
 	CountOperationsProcessing = {}
@@ -2424,7 +2399,7 @@ end
 
 
 -- Cancels any ongoing operations
-function Shatterbox.ClearQueue()
+function Shatterbox:ClearQueue()
 	ShatterQueue = {}
 
 	if isServer then ServerEvents.SignalClearQueue.FireAll() end
@@ -2433,7 +2408,7 @@ end
 
 -- Creates a "Hitbox" object which can be used in place of the destruction functions, and has additional functionality. (like VoxBreaker moveable hitbox)
 -- If you use ExcludePlayersReplication, that will be cleared after every destruction automatically, for convenience.
-function Shatterbox.CreateHitbox()
+function Shatterbox:CreateHitbox()
 
 	local hitbox = {}
 	hitbox.CFrame = CFrame.new() :: CFrame
@@ -2552,7 +2527,7 @@ end
 
 
 -- Returns the original part that is associated with this DirtyGroupID. It was never destroyed, just had its parent set to `nil`
-function Shatterbox.GetOriginalPart(DirtyGroupID : string)
+function Shatterbox:GetOriginalPart(DirtyGroupID : string)
 	local groupData = DirtyGroupData[DirtyGroupID]
 	if not groupData then return nil end
 	return groupData.OriginalPart
@@ -2562,20 +2537,20 @@ end
 -- Takes a point and converts it to the voxel space distance relative to "voxel".
 -- This is a vector which tells you how many voxels away the point is on each local axis, as fractional quantities.
 -- It is possible for an axis to be less than one, but never negative.
-function Shatterbox.VoxelDistanceVector(voxel, point : Vector3) : Vector3
+function Shatterbox:VoxelDistanceVector(voxel, point : Vector3) : Vector3
 	return voxel.CFrame:PointToObjectSpace(point):Abs() / voxel.Size
 end
 
 
 -- Returns a vector that tells you how many voxels a box determined by "size" has on each local axis, as fractional quantities.
 -- It is not possible for an axis to be less than one, because there is always at least one voxel on every axis.
-function Shatterbox.VoxelCountVector(voxel, boxSize : Vector3) : Vector3
+function Shatterbox:VoxelCountVector(voxel, boxSize : Vector3) : Vector3
 	return Vector3.one:Max(boxSize / voxel.Size)
 end
 
 
 -- Will return true if "contains" is FULLY contained by "part", otherwise false
-function Shatterbox.PartEncapsulatesBlockPart(part : Part, contains : Part)
+function Shatterbox:PartEncapsulatesBlockPart(part : Part, contains : Part)
 	assert(part:IsA("Part"), "You can only use this function when a Part is the container.")
 	assert(contains:IsA("Part") and contains.Shape == Enum.PartType.Block, "You can only use this function when a Block Part is the contained object.")	
 	return PartEncapsulatesBlockPart(part, contains.CFrame, contains.Size)
@@ -2583,7 +2558,7 @@ end
 
 
 -- Will register the given callback to the given name. It's suggested you do this at the top of the module instead, otherwise it is only registered on the side you called this function from.
-function Shatterbox.RegisterOnVoxelDestruct(name : string, callback : Types.OnVoxelDestruct)
+function Shatterbox:RegisterOnVoxelDestruct(name : string, callback : Types.OnVoxelDestruct)
 	assert(typeof(name) == "string", "You must register the OnVoxelDestruct callback with a string as the name")
 	local id = name:lower()
 	assert(not rawget(OnVoxelDestructRegistry, id), `Callback with name {id} already exists in the registry`)
@@ -2591,9 +2566,13 @@ function Shatterbox.RegisterOnVoxelDestruct(name : string, callback : Types.OnVo
 end
 
 
-Shatterbox.Voxelize = Voxelize
+function Shatterbox:Voxelize()
+	Voxelize()
+end
 
-Shatterbox.OnVoxelDestruct = HandleVoxelDestruction
+function Shatterbox:OnVoxelDestruct()
+	HandleVoxelDestruction()
+end
 
 Shatterbox.VertexMath = VertexMath
 
@@ -2673,7 +2652,7 @@ local function PrintState()
 	print(P .. "ActiveGMWorkerCount: " .. ActiveGMWorkerCount)
 end
 
-function Shatterbox.PrintState()
+function Shatterbox:PrintState()
 
 	if isServer then ServerEvents.SignalPrintState.FireAll() end
 
@@ -2684,57 +2663,86 @@ end
 
 -- Create connections
 
-RunService.Heartbeat:Connect(HeartbeatWorker)
-
-if isServer then
-
-	if USE_CLIENT_SERVER then
-		ServerEvents.ClientInitComplete.On(ReplicateStateToPlayer)
-
-		ServerEvents.CreateDirtyGroupsFromClient.On(function(plr, DirtyGroups)
-
-			local SerialDirtyGroups = {}
-			for DirtyGroupID, part in pairs(DirtyGroups) do
-				PopulateDirtyGroup(part, DirtyGroupID)
-				SerialDirtyGroups[DirtyGroupID] = SerializedPartInstance(part)
-			end
-
-			ServerEvents.CreateDirtyGroupsFromServer.FireExcept(plr, SerialDirtyGroups)
-		end)
+function Shatterbox:startup(): ()
+	if self.started then
+		warn('Cannot start shatterbox more than once.')
+		return
 	end
 
-elseif isClient then
+	RunService.Heartbeat:Connect(HeartbeatWorker)
+	
+	if isServer then
+		ServerEvents = require(PathToServer).Shatterbox
 
-	if USE_CLIENT_SERVER then
-		ClientEvents.ReplicateState.On(ReplicateStateFromServer)
+		mapContainer = workspace.CurrentCamera
 
-		ClientEvents.ReplicateDestruction.On(ReplicateDestructionFromServer)
+		local serverEffects = require(src.effects.Server)
+		serverEffects:SetReference(Shatterbox)
+		serverEffects.SetReference = nil
+		for name, func in pairs(serverEffects) do OnVoxelDestructRegistry[name:lower()] = func end
+		
+		if USE_CLIENT_SERVER then
+			ServerEvents.ClientInitComplete.On(ReplicateStateToPlayer)
 
-		ClientEvents.CreateDirtyGroupsFromServer.On(CreateSerialDirtyGroups)
+			ServerEvents.CreateDirtyGroupsFromClient.On(function(plr, DirtyGroups)
 
-		ClientEvents.ClientInitComplete.Fire()
+				local SerialDirtyGroups = {}
+				for DirtyGroupID, part in pairs(DirtyGroups) do
+					PopulateDirtyGroup(part, DirtyGroupID)
+					SerialDirtyGroups[DirtyGroupID] = SerializedPartInstance(part)
+				end
+
+				ServerEvents.CreateDirtyGroupsFromServer.FireExcept(plr, SerialDirtyGroups)
+			end)
+		end
+	elseif isClient then
+		ClientEvents = require(PathToClient).Shatterbox
+
+		mapContainer = workspace:FindFirstChild("ClientMap")
+		if not mapContainer then
+			mapContainer = Instance.new("Folder")
+			mapContainer.Parent = workspace
+			mapContainer.Name = "ClientMap"
+		end
+
+		local clientEffects = require(src:WaitForChild("effects"):WaitForChild("Client"))
+		clientEffects:SetReference(Shatterbox)
+		clientEffects.SetReference = nil
+		for name, func in pairs(clientEffects) do OnVoxelDestructRegistry[name:lower()] = func end
+
+		if USE_CLIENT_SERVER then
+			ClientEvents.ReplicateState.On(ReplicateStateFromServer)
+
+			ClientEvents.ReplicateDestruction.On(ReplicateDestructionFromServer)
+
+			ClientEvents.CreateDirtyGroupsFromServer.On(CreateSerialDirtyGroups)
+
+			ClientEvents.ClientInitComplete.Fire()
+		end
+
+		ClientEvents.SignalClearQueue.On(Shatterbox.ClearQueue)
+		ClientEvents.SignalReset.On(function(doNotRevertOwnership) Shatterbox.Reset(doNotRevertOwnership, true) end)
+		ClientEvents.SignalResetArea.On(function(cframe, size) Shatterbox.ResetArea({ CFrame = cframe, Size = size }) end)
+
+		ClientEvents.CreatePuppets.On(CreatePuppets)
+		ClientEvents.ReplicatePuppetStates.On(ReplicatePuppetStates)
+		ClientEvents.DestroyPuppet.On(DestroyPuppet)
+
+		ClientEvents.SignalPrintState.On(PrintState)
 	end
 
-	ClientEvents.SignalClearQueue.On(Shatterbox.ClearQueue)
-	ClientEvents.SignalReset.On(function(doNotRevertOwnership) Shatterbox.Reset(doNotRevertOwnership, true) end)
-	ClientEvents.SignalResetArea.On(function(cframe, size) Shatterbox.ResetArea({ CFrame = cframe, Size = size }) end)
-
-	ClientEvents.CreatePuppets.On(CreatePuppets)
-	ClientEvents.ReplicatePuppetStates.On(ReplicatePuppetStates)
-	ClientEvents.DestroyPuppet.On(DestroyPuppet)
-
-	ClientEvents.SignalPrintState.On(PrintState)
+	self.started = true
 end
 
 
 -- Additions:
-function Shatterbox.DefineClientEffect(effectName: string, callback: () -> ())
+function Shatterbox:DefineClientEffect(effectName: string, callback: () -> ())
 end
 
-function Shatterbox.DefineServerEffect()
+function Shatterbox:DefineServerEffect()
 end
 
-function Shatterbox.UseSettings(settings: typeof(Settings))
+function Shatterbox:UseSettings(settings: typeof(Settings))
 	Settings = settings
 	USE_CLIENT_SERVER = settings.USE_CLIENT_SERVER -- Ik i shouldnt change this but i needa think up a better solution
 end
