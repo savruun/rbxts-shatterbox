@@ -2,9 +2,8 @@
 --#selene: allow(multiple_statements)
 
 local Shatterbox
-local Types = require(script.Parent.Parent:WaitForChild("Types"))
 
-local ClientEffects = {} :: { [string] : Types.OnVoxelDestruct }
+local ClientEffects = {} :: { [string] : any }
 
 -- Do not use this function, it just lets you use the Shatterbox functions in this module (avoiding a cyclic dependancy)
 function ClientEffects:SetReference(shatterbox) Shatterbox = shatterbox end
@@ -39,7 +38,7 @@ ClientEffects.Default = function(voxel) voxel:Destroy() end
 
 
 -- An example effect that leaves rough edges around the destruction that are cleaned on smooth cleanup
-ClientEffects.Rough = function(voxel, info : Types.DestroyedVoxelInfo)
+ClientEffects.Rough = function(voxel, info)
 
     if info.IsAlreadyDebris then -- the voxel is already debris
         if not info.IsEdge then voxel:Destroy() end -- fully contained debris is destroyed

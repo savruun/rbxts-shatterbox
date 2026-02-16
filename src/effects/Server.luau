@@ -3,9 +3,8 @@
 --#selene: allow(incorrect_standard_library_use)
 
 local Shatterbox
-local Types = require(script.Parent.Parent.Types)
 
-local ServerEffects = {} :: { [string] : Types.OnVoxelDestruct }
+local ServerEffects = {} :: { [string]: any }
 
 -- Do not use this function, it just lets you use the Shatterbox functions in this module (avoiding a cyclic dependancy)
 function ServerEffects:SetReference(shatterbox) Shatterbox = shatterbox end
@@ -44,10 +43,10 @@ ServerEffects.MappingVoxelSpace = function(voxel, info)
     local R = info.CuttingPart.Size * 0.5
 
     -- from the center of the sphere, how many voxels away the edge of the sphere is on each axis (in local space)
-    local MaxVoxelDist = Shatterbox.VoxelCountVector(voxel, math.min(R.X, R.Y, R.Z)*Vector3.one)
+    local MaxVoxelDist = Shatterbox:VoxelCountVector(voxel, math.min(R.X, R.Y, R.Z)*Vector3.one)
 
     -- from the center of the current voxel, how many voxels away the center of the sphere is on each axis (in local space)
-    local VoxelDist = Shatterbox.VoxelDistanceVector(voxel, info.CuttingPart.CFrame.Position):Min(MaxVoxelDist)
+    local VoxelDist = Shatterbox:VoxelDistanceVector(voxel, info.CuttingPart.CFrame.Position):Min(MaxVoxelDist)
 
     -- The magnitude of this vector is guaranteed to be in the range 0 to close to 1 because spheres hold a consistent magnitude
     local NormalDist = (VoxelDist / MaxVoxelDist).Magnitude
@@ -88,13 +87,13 @@ raycastParams.FilterType = Enum.RaycastFilterType.Include
 
 ServerEffects.Default = function(voxel) voxel:Destroy() end
 
-ServerEffects.BumpyFloorBreakWalls = function(voxel, info : Types.DestroyedVoxelInfo)
+ServerEffects.BumpyFloorBreakWalls = function(voxel, info : any)
     if info.IsAlreadyDebris then return end
 
     local O = info.UserData.CastOrigin or info.CuttingPart.CFrame.Position
     local toVoxel = voxel.Position - O
     -- retrieves the untouched original part, to check if the voxel should be considered a floor
-    local castTo = Shatterbox.GetOriginalPart(info.DirtyGroupID)
+    local castTo = Shatterbox:GetOriginalPart(info.DirtyGroupID)
 
     raycastParams.FilterDescendantsInstances = { castTo }
 
@@ -108,7 +107,7 @@ ServerEffects.BumpyFloorBreakWalls = function(voxel, info : Types.DestroyedVoxel
 
     else -- everything else becomes a falling voxel using puppeteer
 
-        Shatterbox.Puppeteer(voxel) -- start controlled replication of "voxel" to clients (tween between replication of CFrames)
+        Shatterbox:Puppeteer(voxel) -- start controlled replication of "voxel" to clients (tween between replication of CFrames)
 
         voxel.AssemblyLinearVelocity = toVoxel.Unit * (math.random() * 25 + 50)
     end
