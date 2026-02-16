@@ -75,7 +75,7 @@ local function FindHumanoidAsAncestorChild(i : Instance)
 	while i do
 		local hum = i:FindFirstChildWhichIsA("Humanoid")
 		if hum then return hum end
-		i = i.Parent
+		i = i.Parent :: Instance
 	end
 	return nil
 end
