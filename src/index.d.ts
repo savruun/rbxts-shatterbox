@@ -1,5 +1,6 @@
 /// <reference types="@rbxts/types" />
 
+import Effects from "./Effects";
 import type { 
 	HitboxObject, 
 	DestructionParams, 
@@ -42,6 +43,12 @@ declare class Shatterbox {
 	 */
 	public readonly VertexMath: VertexMath;
 
+	/**
+	 * Default Effects for Voxel Destruction.
+	 * @readonly
+	 */
+	public readonly DefaultEffects: Effects;
+	
 	/**
 	 * Whether the Shatterbox instance has been started
 	 * @internal
