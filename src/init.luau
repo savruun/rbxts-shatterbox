@@ -31,6 +31,7 @@ local lib = src:WaitForChild("lib")
 local PathToClient = lib:WaitForChild("Client")
 local PathToServer = lib:WaitForChild("Server")
 
+local Effects = require(src:WaitForChild('Effects'))
 local DefaultSettings = require(src:WaitForChild("Settings"))
 
 -- Library imports
@@ -104,6 +105,7 @@ local Shatterbox = {}
 Shatterbox.__index = Shatterbox
 
 Shatterbox.VertexMath = VertexMath
+Shatterbox.DefaultEffects = Effects
 Shatterbox.Settings = DefaultSettings :: Settings
 Shatterbox.USE_CLIENT_SERVER = DefaultSettings.USE_CLIENT_SERVER :: boolean
 Shatterbox.started = false
@@ -844,7 +846,7 @@ function Shatterbox:SerializedCuttingPart(p)
 	}
 end
 
-function Shatterbox:ValidateDestructionParams(intersectingPart, FilterTagged, CleanupDelay, OnVoxelDestruct, GridSize, SkipEncapsulatedVoxels, OnDestructCompleted, UserData, ExcludePlayersReplication, SkipFloors, SkipWalls)
+function Shatterbox.ValidateDestructionParams(self: Shatterbox, intersectingPart, FilterTagged, CleanupDelay, OnVoxelDestruct, GridSize, SkipEncapsulatedVoxels, OnDestructCompleted, UserData, ExcludePlayersReplication, SkipFloors, SkipWalls)
 	local CuttingPart = {}
 	local params = {}
 	local tbl = {} :: { [string]: unknown }
@@ -2078,8 +2080,9 @@ function Shatterbox:CreateHitbox()
 	hitbox.VelocityPrediction = false
 	hitbox.VelocityBias = 1
 
+	local _selfRef = self
 	function hitbox:Destroy()
-		self:Destroy(hitbox)
+		_selfRef:Destroy(hitbox)
 		hitbox.ExcludePlayersReplication = {}
 	end
 
@@ -2176,6 +2179,16 @@ function Shatterbox:RegisterOnVoxelDestruct(name: string, callback)
 	self.OnVoxelDestructRegistry[id] = callback
 end
 
+function Shatterbox:GetVoxelDestructionEffect(name: string)
+	assert(typeof(name) == "string", "Voxel destruction effect names must be a string.")
+
+	local id = name:lower()
+	assert(rawget(self.OnVoxelDestructRegistry, id), `No registered voxel destruction behavior "{id}".`)
+
+	return self.OnVoxelDestructRegistry[id]
+end
+
+
 function Shatterbox:PrintState()
 	if isServer then self.ServerEvents.SignalPrintState.FireAll() end
 
@@ -2197,16 +2210,13 @@ function Shatterbox.Start(self: Shatterbox)
 		self:HeartbeatWorker(deltaTime)
 	end)
 
+	local effects = require(src.Effects)
+	effects._SetRef(self)
+	effects._SetRef = nil
+
 	if isServer then
 		self.ServerEvents = require(PathToServer).Shatterbox
 		self.mapContainer = workspace.CurrentCamera
-
-		local serverEffects = require(src.effects.Server)
-		serverEffects:SetReference(self)
-		serverEffects.SetReference = nil
-		for name, func in pairs(serverEffects) do 
-			self.OnVoxelDestructRegistry[name:lower()] = func 
-		end
 
 		if self.USE_CLIENT_SERVER then
 			self.ServerEvents.ClientInitComplete.On(function(plr)
@@ -2232,13 +2242,6 @@ function Shatterbox.Start(self: Shatterbox)
 			self.mapContainer = Instance.new("Folder")
 			self.mapContainer.Parent = workspace
 			self.mapContainer.Name = "ClientMap"
-		end
-
-		local clientEffects = require(src:WaitForChild("effects"):WaitForChild("Client"))
-		clientEffects:SetReference(self)
-		clientEffects.SetReference = nil
-		for name, func in pairs(clientEffects) do 
-			self.OnVoxelDestructRegistry[name:lower()] = func 
 		end
 
 		if self.USE_CLIENT_SERVER then
