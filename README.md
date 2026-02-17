@@ -17,7 +17,7 @@
 
 
 > [!IMPORTANT]
-> I am also NOT currently in the rbxts org, this means you will have to drag shatterbox into your node_modules/@rbxts folder before use.
+> Documentation was partially AI assisted. Though looked over, there may be small inaccuracies. Please open an issue if you spot any.
 
 
 ### Installation
