@@ -22,7 +22,8 @@
   "main": "src/init.luau",
   "types": "src/index.d.ts",
   "files": [
-    "src"
+    "src",
+    "README.md"
   ],
   "scripts": {
     "build": "rbxtsc --rojo dev.project.json"
