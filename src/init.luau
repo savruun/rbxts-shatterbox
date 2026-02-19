@@ -139,17 +139,18 @@ function Shatterbox.new (settings: { [string]: unknown })
 	
 	-- Operation tracking
 	self.ShatterQueue = {}
-	self.CountOperationsProcessing = {}
-	self.OperationAffectedDirtyGroups = {}
-	self.OperationBlacklistedVoxels = {}
+	
+	
+	self.ImaginaryCreateQueue = {}
+	self.ImaginaryDestroyQueue = {}
+	
 	self.OperationAffectedFallingGroups = {}
 	
 	-- Greedy meshing
 	self.GreedyMeshingQueue = {}
-	self.GreedyWorkers = {}
-	self.GreedyWorkersTerminationFlags = {}
-	self.ActiveGMWorkerCount = 0
-	self.ActiveGMWorkerGridSize = {}
+	self.GreedyMeshedImaginaryParts = {}
+	self.NewPlayerStateReplicationQueue = {}
+
 	
 	-- Puppet system
 	self.Puppets = {}
@@ -335,15 +336,9 @@ function Shatterbox:PopulateDirtyGroup(Part: Part, DirtyGroupID: string?)
 end
 
 function Shatterbox.UndoDirtyGroup(self: Shatterbox, DirtyGroupID: string)
+	-- Restore the original part and delete all current members
 	local groupData = self.DirtyGroupData[DirtyGroupID]
 	local groupMembers = self.DirtyGroupMembers[DirtyGroupID]
-
-	local useGreedyMeshing = self:UseSetting('UseGreedyMeshing')
-
-	if useGreedyMeshing and self.GreedyWorkers[DirtyGroupID] then
-		self.GreedyWorkersTerminationFlags[DirtyGroupID] = true
-		repeat RunService.Heartbeat:Wait() until not self.GreedyWorkers[DirtyGroupID]
-	end
 
 	local OriginalPart = groupData.OriginalPart
 	if not self.USE_CLIENT_SERVER or not OriginalPart:IsA("Part") or OriginalPart.Shape ~= Enum.PartType.Block then
@@ -352,206 +347,201 @@ function Shatterbox.UndoDirtyGroup(self: Shatterbox, DirtyGroupID: string)
 		OriginalPart.Parent = self.mapContainer
 	end
 
-	for member in pairs(groupMembers) do 
-		self:DestroyPart(member) 
-	end
+	for member in pairs(groupMembers) do self:DestroyPart(member) end
 	self.DirtyGroupMembers[DirtyGroupID] = {}
+
+	self.GreedyMeshingQueue[DirtyGroupID] = nil
+	self.SmoothCleanupQueue[DirtyGroupID] = nil
 end
 
 --[[ GREEDY MESHING ]]--
 
-function Shatterbox.QueueGreedyMeshing(self: Shatterbox, DirtyGroupID: string, GridSize: number)
-	if self.GreedyWorkers[DirtyGroupID] then 
-		self.GreedyWorkersTerminationFlags[DirtyGroupID] = true 
-	end
-
-	local previousGridSize = self.GreedyMeshingQueue[DirtyGroupID]
-	self.GreedyMeshingQueue[DirtyGroupID] = previousGridSize and math.min(GridSize, previousGridSize) or GridSize
-end
-
-function Shatterbox.InitGreedyState(self: Shatterbox, part, GridSize, groupMin, State, DIMYDIMZ, DIMZ)
-	local minCFrame, _, S, _, _, _, NVX, NVY, NVZ = GridInfo(part.CFrame:Orthonormalize(), part.Size, GridSize)
-
-	if not minCFrame.Rotation:FuzzyEq(groupMin.Rotation, EPSILON) then
-		return 0
-	end
-
-	local off = minCFrame.Position - groupMin.Position
-
-	local ODX = off:Dot(groupMin.XVector) / S.X
-	local ODY = off:Dot(groupMin.YVector) / S.Y
-	local ODZ = off:Dot(groupMin.ZVector) / S.Z
+local HalfVector = Vector3.one * 0.5
+local MAXU32 = 0xFFFFFFFF
+function Shatterbox.InitGreedyState(self: Shatterbox, part, GridSize, groupMin, State, DIMYSTATEDIMZ, STATEDIMZ)
+	local minCFrame, _, S, _, _, _, NVX, NVY, NVZ = GridInfo(part.CFrame--[[:Orthonormalize()]], part.Size, GridSize)
+	if not minCFrame.Rotation:FuzzyEq(groupMin.Rotation, EPSILON) then return nil end
 	
-	local DX = math.floor(ODX + 0.5)
-	local DY = math.floor(ODY + 0.5)
-	local DZ = math.floor(ODZ + 0.5)
+	local Offset = groupMin:PointToObjectSpace(minCFrame.Position) / S
+	local RoundedOffset = (Offset + HalfVector):Floor()
 
-	if math.abs(DX - ODX) > EPSILON or math.abs(DY - ODY) > EPSILON or math.abs(DZ - ODZ) > EPSILON then
-		return 0
-	end
+	if not Offset:FuzzyEq(RoundedOffset, EPSILON) then return nil end
 
-	DX -= 1
-	DY -= 1
+	local DX, DY, DZ = RoundedOffset.X, RoundedOffset.Y, RoundedOffset.Z
 
-	local traversed = 0
+	local ZBitOffset = DZ % 32
+	local ZLayerOffset = DZ // 32
+
+	local InitialWriteWidth = math.min(32 - ZBitOffset, NVZ)
+	local CountLeftAfterInitial = NVZ - InitialWriteWidth
+
+	local FullLayerSpanCount = CountLeftAfterInitial // 32
+	local FinalWriteWidth = CountLeftAfterInitial % 32
+
+	-- Initialize the 3d state volume.   index = (X - 1)*DIMY*STATE_DIMZ + (Y - 1)*STATE_DIMZ + STATE_Z
 	for X = 1, NVX do
-		local dixz = (X + DX) * DIMYDIMZ + DZ
+		local dixz = (X + DX - 1)*DIMYSTATEDIMZ
 		for Y = 1, NVY do
-			local di = dixz + (Y + DY) * DIMZ
-			for Z = 1, NVZ do
-				if traversed == self:UseSetting('GMTraversalsPerFrame') then
-					coroutine.yield()
-					traversed = 0
-				end
+			local di = dixz + (Y + DY - 1)*STATEDIMZ + ZLayerOffset + 1
 
-				State[di + Z] = true
-				traversed += 1
-			end
+			if InitialWriteWidth > 0 then State[di] = bit32.bor(State[di], bit32.lshift(bit32.lshift(1, InitialWriteWidth) - 1, ZBitOffset)) end
+
+			for i = 1, FullLayerSpanCount do State[di + i] = MAXU32 end
+
+			if FinalWriteWidth > 0 then State[di + FullLayerSpanCount + 1] = bit32.bor(State[di + FullLayerSpanCount + 1], bit32.lshift(1, FinalWriteWidth) - 1) end
 		end
 	end
 
-	DX += 1
-	DY += 1
-
-	return {1 + DX, 1 + DY, 1 + DZ, DX + NVX, DY + NVY, DZ + NVZ}, NVX * NVY * NVZ
+	return NVX * NVY * NVZ
 end
 
-function Shatterbox:GreedyMeshWorker(DirtyGroupID: string, GridSize: number?)
+function Shatterbox:GreedyMeshBehavior(DirtyGroupID: string, ImaginaryParts)
+	local GridSize = self.GreedyMeshingQueue[DirtyGroupID]
+
 	local dirtyGroupData = self.DirtyGroupData[DirtyGroupID]
 	local dirtyGroupMembers = self.DirtyGroupMembers[DirtyGroupID]
+
 	local Original = dirtyGroupData.OriginalPart
 
+	-- The bounding area of Greedy Meshing, defined by the original part before it was ever destroyed
 	local groupMin, _, VoxelSize, _, _, _, DIMX, DIMY, DIMZ = GridInfo(Original.CFrame, Original.Size, GridSize)
-	local DIMYDIMZ = DIMY * DIMZ
+	local STATEDIMZ = math.ceil(DIMZ / 32)
+	local DIMYSTATEDIMZ = DIMY*STATEDIMZ
 	local VSX, VSY, VSZ = VoxelSize.X, VoxelSize.Y, VoxelSize.Z
 
-	local State, Visited = {}, {}
-	local OriginalPartsInfo = {}
+	-- local stateBitCount = DIMX*DIMYDIMZ
+
+	-- flat 3d state array : index = (X - 1)*DIMY*STATE_DIMZ + (Y - 1)*STATE_DIMZ + STATE_Z
+	local State = table.create(DIMX*DIMYSTATEDIMZ, 0)
+
+	-- information about the original parts, used for smoothly displaying the output of greedy meshing
+	local OriginalParts = {} :: { Part }
+
+	-- the total number of voxels in the State array
 	local count = 0
 
 	for member in pairs(dirtyGroupMembers) do
 		if member:HasTag(DebrisTag) then continue end
 
-		local gridInfo, n = self:InitGreedyState(member, GridSize, groupMin, State, DIMYDIMZ, DIMZ)
-		if n > 0 then
+		table.insert(OriginalParts, member)
+
+		if self.ImaginaryDestroyQueue[member] then continue end
+
+		local n = self:InitGreedyState(member, GridSize, groupMin, State, DIMYSTATEDIMZ, STATEDIMZ)
+		if n then
 			count += n
-			table.insert(OriginalPartsInfo, {
-				Part = member,
-				PartGridInfo = gridInfo,
-				Contributed = {}
-			})
+			self.ImaginaryDestroyQueue[member] = true
 		end
 	end
 
+	for _, imaginaryMember in ipairs(ImaginaryParts) do
+		local n = self:InitGreedyState(imaginaryMember, GridSize, groupMin, State, DIMYSTATEDIMZ, STATEDIMZ)
+		if n then count += n end
+	end
+
+	if count == 0 then return end
+
 	local meshed = {}
-	local traversed = 0
-	local sx, sy, sz = 1, 1, 1
 
-	-- Greedy meshing algorithm
+	local searchIndex = 1
 	while count > 0 do
-		local X, Y, Z = sx, sy, sz
-		local iyz = (Y - 1) * DIMZ + Z
-		local si = (X - 1) * DIMYDIMZ + iyz
+		-- find first unvisited and active state position
+		while State[searchIndex] == 0 do searchIndex += 1 end
+		local startIndex = searchIndex
+		local state = State[searchIndex]
 
-		while Visited[si] or not State[si] do
-			if traversed == self:UseSetting('GMTraversalsPerFrame') then
-				coroutine.yield()
-				traversed = 0
+		local ZBitOffset = bit32.countrz(state)
+
+		local StartX, rem = ((searchIndex - 1) // DIMYSTATEDIMZ) + 1, (searchIndex - 1) % DIMYSTATEDIMZ
+		local StartY, StartLayerZ = (rem // STATEDIMZ) + 1, (rem % STATEDIMZ) + 1
+		local StartZ = 32*(StartLayerZ - 1) + ZBitOffset + 1
+
+		-- planar expansion along Z axis
+		local CountZ = bit32.countrz(bit32.bnot(bit32.rshift(state, ZBitOffset)))
+		local FirstLayerMask = bit32.lshift(bit32.lshift(1, CountZ) - 1, ZBitOffset)
+		-- mark these cells as visited
+		State[searchIndex] = bit32.bxor(state, FirstLayerMask)
+
+		local LastLayerMask
+		local EndZBit = ZBitOffset + CountZ - 1
+		local EndLayerZ = StartLayerZ
+		while EndZBit == 31 do
+			local nextIndex = searchIndex + 1
+			local nextLayer = State[nextIndex]
+			if not nextLayer or nextLayer == 0 then break end
+
+			if nextLayer == MAXU32 then
+				EndLayerZ += 1
+				EndZBit = 31
+				searchIndex = nextIndex
+				CountZ += 32
+				-- mark these cells as visited
+				State[searchIndex] = 0
+				continue
 			end
 
-			if X < DIMX then
-				X += 1
-			else
-				X = 1
-				if Y < DIMY then
-					Y += 1
-				else
-					Y = 1
-					if Z < DIMZ then
-						Z += 1
-					else
-						Z = 1
-					end
-				end
-				iyz = (Y - 1) * DIMZ + Z
-			end
+			local countOnes = bit32.countrz(bit32.bnot(nextLayer))
+			if countOnes == 0 then break end
 
-			traversed += 1
-			si = (X - 1) * DIMYDIMZ + iyz
+			EndLayerZ += 1
+			EndZBit = countOnes - 1
+			searchIndex = nextIndex
+			CountZ += countOnes
+			LastLayerMask = bit32.lshift(1, countOnes) - 1
+			-- mark these cells as visited
+			State[searchIndex] = bit32.bxor(nextLayer, LastLayerMask)
+
+			break
 		end
-		sx, sy, sz = X, Y, Z
-		Visited[si] = true
 
-		-- Planar expansion along X axis
-		while X < DIMX do
-			local DX = X + 1
-			if traversed == self:UseSetting('GMTraversalsPerFrame') then
-				coroutine.yield()
-				traversed = 0
-			end
+		local EndZ = 32*(EndLayerZ - 1) + EndZBit + 1
+		local EndLayerOffset = EndLayerZ - StartLayerZ
 
-			local index = (DX - 1) * DIMYDIMZ + (Y - 1) * DIMZ + Z
-			if Visited[index] or not State[index] then break end
+		-- planar expansion along Y axis
+		local EndY = StartY
+		while EndY + 1 <= DIMY do
+			local index = startIndex + STATEDIMZ * (EndY - StartY + 1)
 
-			Visited[index] = true
-			traversed += 1
-			X = DX
-		end
+			local EndLayerIndex = index + EndLayerOffset
+			if bit32.band(State[index], FirstLayerMask) ~= FirstLayerMask or (LastLayerMask and bit32.band(State[EndLayerIndex], LastLayerMask) ~= LastLayerMask) then break end
 
-		-- Planar expansion along Y axis
-		while Y < DIMY do
-			local DY = Y + 1
-			local iyz = (DY - 1) * DIMZ + Z
 			local breakExpansion = false
-			local indices = {}
-
-			for ix = sx, X do
-				if traversed == self:UseSetting('GMTraversalsPerFrame') then
-					coroutine.yield()
-					traversed = 0
-				end
-
-				local index = (ix - 1) * DIMYDIMZ + iyz
-				if Visited[index] or not State[index] then
-					breakExpansion = true
-					break
-				end
-
-				indices[index] = true
-				traversed += 1
+			for i = 1, EndLayerOffset - 1 do
+				if State[index + i] == MAXU32 then continue end
+				breakExpansion = true
+				break
 			end
 
 			if breakExpansion then break end
 
-			for index in pairs(indices) do
-				Visited[index] = true
-			end
+			State[index] = bit32.bxor(State[index], FirstLayerMask)
+			if LastLayerMask then State[EndLayerIndex] = bit32.bxor(State[EndLayerIndex], LastLayerMask) end
 
-			Y = DY
+			for i = 1, EndLayerOffset - 1 do State[index + i] = 0 end
+
+			EndY += 1
 		end
 
-		-- Planar expansion along Z axis
-		while Z < DIMZ do
-			local DZ = Z + 1
+
+		-- planar expansion along X axis
+		local EndX = StartX
+		while EndX + 1 <= DIMX do
+			local index = startIndex + DIMYSTATEDIMZ * (EndX - StartX + 1)
+
 			local breakExpansion = false
-			local indices = {}
+			for Y = StartY, EndY do
+				local I = index + STATEDIMZ * (Y - StartY)
 
-			for ix = sx, X do
-				local ixz = (ix - 1) * DIMYDIMZ + DZ
-				for iy = sy, Y do
-					if traversed == self:UseSetting('GMTraversalsPerFrame') then
-						coroutine.yield()
-						traversed = 0
-					end
+				local EndLayerIndex = I + EndLayerOffset
+				if bit32.band(State[I], FirstLayerMask) ~= FirstLayerMask or (LastLayerMask and bit32.band(State[EndLayerIndex], LastLayerMask) ~= LastLayerMask) then
+					breakExpansion = true
+					break
+				end
 
-					local index = ixz + (iy - 1) * DIMZ
-					if Visited[index] or not State[index] then
-						breakExpansion = true
-						break
-					end
-
-					indices[index] = true
-					traversed += 1
+				for i = 1, EndLayerOffset - 1 do
+					if State[I + i] == MAXU32 then continue end
+					breakExpansion = true
+					break
 				end
 
 				if breakExpansion then break end
@@ -559,148 +549,92 @@ function Shatterbox:GreedyMeshWorker(DirtyGroupID: string, GridSize: number?)
 
 			if breakExpansion then break end
 
-			for index in pairs(indices) do
-				Visited[index] = true
+			for Y = StartY, EndY do
+				local I = index + STATEDIMZ * (Y - StartY)
+				local EndLayerIndex = I + EndLayerOffset
+
+				State[I] = bit32.bxor(State[I], FirstLayerMask)
+				if LastLayerMask then State[EndLayerIndex] = bit32.bxor(State[EndLayerIndex], LastLayerMask) end
+
+				for i = 1, EndLayerOffset - 1 do State[I + i] = 0 end
 			end
 
-			Z = DZ
+			EndX += 1
 		end
 
-		local NX, NY, NZ = X - sx + 1, Y - sy + 1, Z - sz + 1
+
+		-- the number of voxels in the meshed span on every axis
+		local NX, NY, NZ = EndX - StartX + 1, EndY - StartY + 1, EndZ - StartZ + 1
+		-- subtract the total number of voxels in the meshed span
 		count -= NX * NY * NZ
 
+		-- define a cuboid using the start and end positions.
 		table.insert(meshed, {
-			CFrame = (groupMin + groupMin.XVector * VSX * ((X + sx) * 0.5 - 1) + groupMin.YVector * VSY * ((Y + sy) * 0.5 - 1) + groupMin.ZVector * VSZ * ((Z + sz) * 0.5 - 1)):Orthonormalize(),
-			Size = VoxelSize * Vector3.new(NX, NY, NZ),
-			Contributed = {},
-			MINX = sx,
-			MINY = sy,
-			MINZ = sz,
-			MAXX = X,
-			MAXY = Y,
-			MAXZ = Z
+			DirtyGroupID = DirtyGroupID,
+			CFrame = ( groupMin + groupMin.XVector*VSX*((StartX + EndX)*0.5 - 1) + groupMin.YVector*VSY*((StartY + EndY)*0.5 - 1) + groupMin.ZVector*VSZ*((StartZ + EndZ)*0.5 - 1) ),
+			Size = VoxelSize * Vector3.new(NX, NY, NZ)
 		})
 	end
 
-	-- Process voxel count contributions
-	for meshedIndex, MI in ipairs(meshed) do
-		local contributedToMeshed = MI.Contributed
-		local MINX, MINY, MINZ = MI.MINX, MI.MINY, MI.MINZ
-		local MAXX, MAXY, MAXZ = MI.MAXX, MI.MAXY, MI.MAXZ
-
-		for i, partInfo in ipairs(OriginalPartsInfo) do
-			local PMINX, PMINY, PMINZ, PMAXX, PMAXY, PMAXZ = unpack(partInfo.PartGridInfo)
-
-			if math.max(PMINX, MINX) > math.min(PMAXX, MAXX) or 
-			   math.max(PMINY, MINY) > math.min(PMAXY, MAXY) or 
-			   math.max(PMINZ, MINZ) > math.min(PMAXZ, MAXZ) then 
-				continue 
-			end
-
-			table.insert(contributedToMeshed, i)
-			table.insert(partInfo.Contributed, meshedIndex)
-		end
-	end
-
-	local InstancedMeshIDs, numInstanced, numMeshed = {}, 0, #meshed
-	count = 0
-
-	-- Dual DFS for smooth display of meshing
-	while numInstanced < numMeshed do
-		if count >= self:UseSetting('GMPartCreationsPerFrame') then
-			coroutine.yield()
-			count = 0
-		end
-
-		local startIndex
-		for i, meshedInfo in ipairs(meshed) do
-			if InstancedMeshIDs[i] then continue end
-			if #meshedInfo.Contributed == 1 then
-				InstancedMeshIDs[i] = true
-				numInstanced += 1
-				continue
-			end
-			startIndex = i
-			break
-		end
-
-		local visitedOriginals, visitedMeshed, pathStack = {}, {[startIndex] = true}, {startIndex}
-
-		while #pathStack > 0 do
-			local mi = table.remove(pathStack)
-			local meshedInfo = meshed[mi]
-
-			for _, io in ipairs(meshedInfo.Contributed) do
-				if visitedOriginals[io] then continue end
-				visitedOriginals[io] = true
-
-				local partInfo = OriginalPartsInfo[io]
-
-				for _, im in ipairs(partInfo.Contributed) do
-					if visitedMeshed[im] then continue end
-					visitedMeshed[im] = true
-					table.insert(pathStack, im)
-				end
+	for _, meshedInfo in ipairs(meshed) do
+		local index, found = nil, nil
+		for i, original in ipairs(OriginalParts) do
+			if original.CFrame:FuzzyEq(meshedInfo.CFrame, 0.001) and original.Size:FuzzyEq(meshedInfo.Size, 0.001) then
+				index, found = i, original
+				break
 			end
 		end
 
-		for meshedID in pairs(visitedMeshed) do
-			InstancedMeshIDs[meshedID] = true
-			numInstanced += 1
-
-			local meshedInfo = meshed[meshedID]
-			self:InstantiatePart(DirtyGroupID, meshedInfo.CFrame, meshedInfo.Size)
-
-			count += 1
-		end
-
-		for originalID in pairs(visitedOriginals) do
-			self:DestroyPart(OriginalPartsInfo[originalID].Part)
+		if index then
+			table.remove(OriginalParts, index)
+			self.ImaginaryDestroyQueue[found] = nil
+		else
+			table.insert(self.GreedyMeshedImaginaryParts, meshedInfo)
 		end
 	end
 end
 
-function Shatterbox:GreedyMeshingBehavior()
-	if self.ActiveGMWorkerCount < self:UseSetting('GMWorkerCount') then
-		local toRemove = {}
-		for DirtyGroupID, GridSize in pairs(self.GreedyMeshingQueue) do
-			if self.CountOperationsProcessing[DirtyGroupID] or self.GreedyWorkers[DirtyGroupID] then continue end
-			if not next(self.DirtyGroupMembers[DirtyGroupID]) then
-				toRemove[DirtyGroupID] = true
-				continue
-			end
+-- function Shatterbox:GreedyMeshingBehavior()
+-- 	if self.ActiveGMWorkerCount < self:UseSetting('GMWorkerCount') then
+-- 		local toRemove = {}
+-- 		for DirtyGroupID, GridSize in pairs(self.GreedyMeshingQueue) do
+-- 			if self.CountOperationsProcessing[DirtyGroupID] or self.GreedyWorkers[DirtyGroupID] then continue end
+-- 			if not next(self.DirtyGroupMembers[DirtyGroupID]) then
+-- 				toRemove[DirtyGroupID] = true
+-- 				continue
+-- 			end
 			
-			local thr = coroutine.create(function()
-				self:GreedyMeshWorker(DirtyGroupID, GridSize)
-			end)
+-- 			local thr = coroutine.create(function()
+-- 				self:GreedyMeshWorker(DirtyGroupID, GridSize)
+-- 			end)
 
-			toRemove[DirtyGroupID] = true
-			self.GreedyWorkers[DirtyGroupID] = thr
-			self.ActiveGMWorkerCount += 1
-			self.ActiveGMWorkerGridSize[DirtyGroupID] = GridSize
+-- 			toRemove[DirtyGroupID] = true
+-- 			self.GreedyWorkers[DirtyGroupID] = thr
+-- 			self.ActiveGMWorkerCount += 1
+-- 			self.ActiveGMWorkerGridSize[DirtyGroupID] = GridSize
 
-			coroutine.resume(thr)
+-- 			coroutine.resume(thr)
 
-			if self.ActiveGMWorkerCount >= self:UseSetting('GMWorkerCount') then break end
-		end
-		for DirtyGroupID in pairs(toRemove) do 
-			self.GreedyMeshingQueue[DirtyGroupID] = nil 
-		end
-	end
+-- 			if self.ActiveGMWorkerCount >= self:UseSetting('GMWorkerCount') then break end
+-- 		end
+-- 		for DirtyGroupID in pairs(toRemove) do 
+-- 			self.GreedyMeshingQueue[DirtyGroupID] = nil 
+-- 		end
+-- 	end
 
-	for DirtyGroupID, thr in pairs(self.GreedyWorkers) do
-		local status = coroutine.status(thr)
+-- 	for DirtyGroupID, thr in pairs(self.GreedyWorkers) do
+-- 		local status = coroutine.status(thr)
 
-		if status == "dead" or (status == "suspended" and self.GreedyWorkersTerminationFlags[DirtyGroupID]) then
-			self.GreedyWorkersTerminationFlags[DirtyGroupID] = nil
-			self.GreedyWorkers[DirtyGroupID] = nil
-			self.ActiveGMWorkerCount -= 1
-			self.ActiveGMWorkerGridSize[DirtyGroupID] = nil
-		elseif status == "suspended" then
-			coroutine.resume(thr)
-		end
-	end
-end
+-- 		if status == "dead" or (status == "suspended" and self.GreedyWorkersTerminationFlags[DirtyGroupID]) then
+-- 			self.GreedyWorkersTerminationFlags[DirtyGroupID] = nil
+-- 			self.GreedyWorkers[DirtyGroupID] = nil
+-- 			self.ActiveGMWorkerCount -= 1
+-- 			self.ActiveGMWorkerGridSize[DirtyGroupID] = nil
+-- 		elseif status == "suspended" then
+-- 			coroutine.resume(thr)
+-- 		end
+-- 	end
+-- end
 
 --[[ MARKING AND DESTRUCTION ]]--
 
@@ -710,7 +644,6 @@ function Shatterbox:MarkDirty(Part: Part, destructionParams)
 	if Part:HasTag(DebrisTag) then return CreatedDirtyGroups end
 
 	local VisitedDirtyGroups = {}
-	local GridSize = Part:GetAttribute("GridSize")
 	local PartDirtyGroupID = Part:GetAttribute(DirtyGroupIDAttribute)
 
 	local CreatedFallingGroupID
@@ -751,9 +684,6 @@ function Shatterbox:MarkDirty(Part: Part, destructionParams)
 
 	if PartDirtyGroupID then
 		VisitedDirtyGroups[PartDirtyGroupID] = true
-		if self:UseSetting('UseGreedyMeshing') and not Part:GetAttribute(FallingGroupIDAttribute) and Part:IsA("Part") and Part.Shape == Enum.PartType.Block then
-			self:QueueGreedyMeshing(PartDirtyGroupID, GridSize or destructionParams.GridSize or self:UseSetting('DefaultGridSize'))
-		end
 		if not PartIsDivisible and NonDivisibleInteraction ~= "NONE" and not next(self.DirtyGroupMembers[PartDirtyGroupID]) then
 			Part.Parent = nil
 			if NonDivisibleInteraction == "FALL" then
@@ -776,6 +706,9 @@ end
 
 function Shatterbox:GetDestructibleParts(destructionParams)
 	local cuttingPart, replicated = destructionParams.CuttingPart, destructionParams.replicated
+
+	local ParameterGridSize = destructionParams.GridSize
+
 	local skipFloors, skipWalls = destructionParams.SkipFloors, destructionParams.SkipWalls
 	local skipFloorsOrWalls = skipFloors or skipWalls
 
@@ -787,11 +720,20 @@ function Shatterbox:GetDestructibleParts(destructionParams)
 
 	local AffectedFallingGroups = self.OperationAffectedFallingGroups[destructionParams.ID] or {}
 
-	for _, part in ipairs(workspace:GetPartsInPart(IntersectingPart, destructionParams.FilterTagged and self:OverlapParamsOfTagged(destructionParams.FilterTagged))) do
+	local AffectedDirtyGroups = {}
+
+	for _, part in ipairs( workspace:GetPartsInPart(IntersectingPart, destructionParams.FilterTagged and self:OverlapParamsOfTagged(destructionParams.FilterTagged)) ) do
+		if self.ImaginaryDestroyQueue[part] then continue end
+
 		if (replicated and not part:IsDescendantOf(self.mapContainer)) or self:ShouldSkipInstance(part) then continue end
 
+		if part:HasTag(DebrisTag) then
+			table.insert(partsInPart, part)
+			continue
+		end
+
 		if skipFloorsOrWalls then
-			raycastParams.FilterDescendantsInstances = {part}
+			raycastParams.FilterDescendantsInstances = { part }
 			local res = workspace:Raycast(cuttingPart.CFrame.Position, part.Position - cuttingPart.CFrame.Position, raycastParams)
 			if res then
 				local isFloor = res.Normal:FuzzyEq(Vector3.yAxis, 0.001)
@@ -804,9 +746,7 @@ function Shatterbox:GetDestructibleParts(destructionParams)
 			createdDirtyGroups[DirtyGroupID] = true
 		end
 
-		if fallingGroupID then 
-			createdFallingGroups[fallingGroupID] = true 
-		end
+		if fallingGroupID then createdFallingGroups[fallingGroupID] = true end
 
 		fallingGroupID = part:GetAttribute(FallingGroupIDAttribute)
 		if fallingGroupID then
@@ -815,6 +755,16 @@ function Shatterbox:GetDestructibleParts(destructionParams)
 
 		if part:IsA("Part") and part.Shape == Enum.PartType.Block then
 			table.insert(partsInPart, part)
+
+			local DirtyGroupID = part:GetAttribute(DirtyGroupIDAttribute)
+			local groupData = self.DirtyGroupData[DirtyGroupID]
+
+			local newGridSize = ParameterGridSize or groupData.GridSize or self:UseSetting('DefaultGridSize')
+			local oldGridSize = self.GreedyMeshingQueue[DirtyGroupID]
+
+			self.GreedyMeshingQueue[DirtyGroupID] = oldGridSize and math.min(oldGridSize, newGridSize) or newGridSize
+
+			AffectedDirtyGroups[DirtyGroupID] = true
 		end
 	end
 
@@ -833,7 +783,7 @@ function Shatterbox:GetDestructibleParts(destructionParams)
 
 	self.OperationAffectedFallingGroups[destructionParams.ID] = AffectedFallingGroups
 
-	return partsInPart, createdDirtyGroups, createdFallingGroups
+	return partsInPart, createdDirtyGroups, createdFallingGroups, AffectedDirtyGroups
 end
 
 --[[ VALIDATION AND SERIALIZATION ]]--
