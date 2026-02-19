@@ -11,6 +11,12 @@
   <a href=https://www.npmjs.com/package/@kunosyn/shatterbox>
     <img src=https://img.shields.io/npm/dt/@kunosynshatterbox />
   </a>
+  <a href=https://discord.gg/WRfz79uRTy>
+    <img src=https://img.shields.io/discord/1383861480377815080 />
+  </a>
+  <a href=https://devforum.roblox.com/t/shatterbox-client-server-voxel-destruction-simple-and-optimized-release-8/3674163>
+    <img src=https://img.shields.io/badge/Devforum-Post-informational/>
+  </a>
 </div>
 
 ## About
