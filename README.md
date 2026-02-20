@@ -9,7 +9,7 @@
     <img src=https://img.shields.io/npm/v/@kunosyn/shatterbox />
   </a>
   <a href=https://www.npmjs.com/package/@kunosyn/shatterbox>
-    <img src=https://img.shields.io/npm/dt/@kunosynshatterbox />
+    <img src=https://img.shields.io/npm/dt/@kunosyn/shatterbox />
   </a>
   <a href=https://discord.gg/WRfz79uRTy>
     <img src=https://img.shields.io/discord/1383861480377815080 />
